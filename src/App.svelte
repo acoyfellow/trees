@@ -327,17 +327,19 @@
   <header class="topbar">
     <div class="brand">
       <div class="brand-title">
-        <span class="pill-iap">IAP v0.1</span>
+        <span class="pill-iap">Mock-up</span>
         <h1>One Document, Six UI Trees</h1>
       </div>
       <p class="subtitle">
-        Same live JSON document &amp; lazy intents rendered by 6 catalog-agnostic host bindings.
-        Click any PR row or button to materialize a page once, then switch trees — zero extra model calls.
+        A mock-up of the idea behind Intent UI: one document, many UI trees. Click a PR row or
+        Release Checklist to "build" a page once, then switch skins — no new (simulated) model calls.
       </p>
       <p class="credit">
-        A fan demo of <a href="https://intent-ui.com">Intent UI</a> by Brayden Wilmoth
-        (<a href="https://intent-ui.com/rfc">RFC: Intents and Persistence</a>). Model calls are simulated;
-        the document shape follows IAP v0.1. <a href="https://github.com/acoyfellow/trees">source</a> ·
+        A fan mock-up of <a href="https://intent-ui.com">Intent UI</a> by Brayden Wilmoth
+        (<a href="https://intent-ui.com/rfc">RFC: Intents and Persistence</a>). It is not an IAP host:
+        the screens are hand-written, the JSON panel is illustrative and only loosely follows IAP v0.1
+        (some fields are made up), the six trees are CSS skins over one component set, and model calls
+        are simulated. <a href="https://github.com/acoyfellow/trees">source</a> ·
         <a href="https://customer0.dev">customer0</a>
       </p>
     </div>
@@ -673,7 +675,7 @@
   {#if showInspector}
     <div class="inspector">
       <div class="inspector-head">
-        <span>Shared IAP v0.1 Document (<code>version: {doc.version}</code>, materialized: {materializedPages.length ? materializedPages.join(", ") : "none yet"})</span>
+        <span>Illustrative IAP-style JSON, not a validated IAP document (<code>version: {doc.version}</code>, materialized: {materializedPages.length ? materializedPages.join(", ") : "none yet"})</span>
       </div>
       <pre class="json-pre">{JSON.stringify(doc, null, 2)}</pre>
     </div>
