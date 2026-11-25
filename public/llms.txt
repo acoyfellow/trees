@@ -1,0 +1,19 @@
+# trees
+
+> One Intent UI (IAP v0.1) document rendered live by six catalog-agnostic UI trees: Kumo, terminal TUI, System 7, Swiss print, LCARS and shadcn.
+
+- Live: https://trees.customer0.dev
+- Source: https://github.com/acoyfellow/trees
+- Based on: https://intent-ui.com (RFC: https://intent-ui.com/rfc) by Brayden Wilmoth
+
+## What it shows
+
+- A single IAP document (pages, sources, blocks, intents) is the source of truth; each UI tree is a host binding over the same component types.
+- Clicking a row or button with an unbuilt intent "materializes" a page into the document once (simulated model call, version bump).
+- Switching UI trees, or opening two side by side, replays the materialized page with zero model calls.
+- The JSON inspector shows the document as it changes.
+
+## Caveats
+
+- Model calls are simulated; there is no LLM behind it. Data is a fixed fixture.
+- Renderers are hand-written CSS themes over one component set, not separate component libraries.

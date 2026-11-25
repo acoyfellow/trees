@@ -1,0 +1,8 @@
+{
+  "name": "customer0-trees",
+  "account_id": "29db7c74093386544fed8046ef083a4b",
+  "compatibility_date": "2026-11-01",
+  "assets": { "directory": "./dist", "not_found_handling": "single-page-application" },
+  "workers_dev": false,
+  "routes": [{ "pattern": "trees.customer0.dev", "custom_domain": true }]
+}
