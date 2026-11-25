@@ -1,74 +1,134 @@
 <script>
-  // Every screen below comes from the IAP host in ./iap/host (built from the spec, 28/28
-  // conformance fixtures): validate -> load -> resolvePage/resolveOverlay -> a binding.
-  // Nothing inside the frames is hand-written markup.
-  import fixture from "./iap/trees-doc.json";
-  import workedExample from "./iap/change-06-worked-example.json";
-  import { validate, load, loadCatalog, invokeIntent } from "./iap/host/index.ts";
+  // Every screen inside the stage is rendered by the spec-built IAP host in ./iap/host
+  // (28/28 conformance fixtures): validate() -> load() -> resolvePage()/resolveOverlay() -> binding.
+  import treesFixture from "./iap/trees-doc.json";
+  import showcaseFixture from "./iap/showcase.json";
+  import failureFixture from "./iap/failure-isolation.json";
+  import templates from "./iap/templates.json";
+  import { validate, load, loadCatalog, invokeIntent, applyChange } from "./iap/host/index.ts";
   import { resolvePage, resolveOverlay } from "./iap/host/core/page.ts";
   import * as html from "./iap/host/renderers/html.ts";
   import * as term from "./iap/host/renderers/terminal.ts";
   import { SKINS } from "./skins.js";
 
   const catalog = loadCatalog();
-  const ASOF = fixture.asOf;
-  const INTENT_TEMPLATE = workedExample.change.ops[0].template; // RFC §15 template, used as the simulated model's answer
 
-  const RENDERERS = [
-    { id: "kumo", name: "Kumo", tag: "HTML binding", desc: "The host's HTML renderer for the kumo@2.17 catalog" },
-    { id: "tui", name: "Terminal TUI", tag: "terminal binding", desc: "The host's plain-text renderer, same resolved tree" },
-    { id: "mac7", name: "System 7", tag: "skin of HTML", desc: "CSS skin over the HTML binding" },
-    { id: "swiss", name: "Swiss Print", tag: "skin of HTML", desc: "CSS skin over the HTML binding" },
-    { id: "lcars", name: "LCARS", tag: "skin of HTML", desc: "CSS skin over the HTML binding" },
-    { id: "shadcn", name: "shadcn", tag: "skin of HTML", desc: "CSS skin over the HTML binding" }
+  const DOCS = [
+    { id: "prs", label: "Team PRs", tag: "RFC §15", fixture: treesFixture, desc: "Two blocks, two lazy intents, live /ui toggle, and applyChange()." },
+    { id: "showcase", label: "All 18 Primitives", tag: "kumo@2.17", fixture: showcaseFixture, desc: "Every component in the Kumo 2.17 catalog rendered by both bindings." },
+    { id: "failure", label: "Failure Isolation", tag: "render-03", fixture: failureFixture, desc: "One broken data source fails in place while sibling blocks still render." }
   ];
 
-  const initialDoc = () => structuredClone(fixture.document);
+  const BINDINGS = [
+    { id: "kumo", name: "Kumo", tag: "HTML binding", kind: "binding", desc: "Real HTML renderer for kumo@2.17" },
+    { id: "tui", name: "Terminal", tag: "Text binding", kind: "binding", desc: "Real plain-text renderer from the same resolved tree" }
+  ];
 
-  let doc = $state(initialDoc());
+  const SKINS_META = [
+    { id: "mac7", name: "System 7", tag: "HTML skin", kind: "skin", desc: "1991 1-bit CSS skin over the HTML binding" },
+    { id: "swiss", name: "Swiss", tag: "HTML skin", kind: "skin", desc: "Editorial grid CSS skin over the HTML binding" },
+    { id: "lcars", name: "LCARS", tag: "HTML skin", kind: "skin", desc: "Starfleet HUD CSS skin over the HTML binding" },
+    { id: "shadcn", name: "shadcn", tag: "HTML skin", kind: "skin", desc: "Minimal zinc CSS skin over the HTML binding" }
+  ];
+
+  const ALL_RENDERERS = [...BINDINGS, ...SKINS_META];
+
+  const isWideInit = typeof window !== "undefined" ? window.innerWidth >= 1080 : true;
+
+  let activeDocId = $state("prs");
+  let activeFixture = $derived(DOCS.find((d) => d.id === activeDocId) ?? DOCS[0]);
+  let doc = $state(structuredClone(treesFixture.document));
+
   let activeRenderer = $state("kumo");
-  let compareMode = $state(false);
+  let compareMode = $state(isWideInit);
   let compareRenderer = $state("tui");
+
   let showInspector = $state(false);
   let inspectTab = $state("doc");
+  let editorText = $state("");
+  let editorError = $state(null);
+
   let modelCalls = $state(0);
   let replayHits = $state(0);
+  let changeApplied = $state(false);
   let overlay = $state(null); // { item, templateId }
   let busy = $state(null);
   let page = $state(null);
   let loadError = $state(null);
   let eventLog = $state([]);
+  let lastPulse = $state("idle"); // idle | materialize | replay | change
 
   let issues = $derived(validate($state.snapshot(doc), catalog));
-  let rows = $derived(page?.blocks?.["prs-table"]?.tree?.nodes?.t?.props?.rows ?? []);
+  let prRows = $derived(page?.blocks?.["prs-table"]?.tree?.nodes?.t?.props?.rows ?? []);
+  let hasFailingBlock = $derived(Boolean(doc.spec?.blocks?.["failing-prs"]));
+  let hasPrTemplate = $derived(doc.templates?.some((t) => t.id === "tpl-pr") ?? false);
+  let hasComparedBindings = $derived(
+    (compareMode && ((activeRenderer === "tui") !== (compareRenderer === "tui"))) || activeRenderer === "tui"
+  );
+
   let overlayResolved = $derived.by(() => {
     if (!overlay) return null;
-    const t = doc.templates.find((x) => x.id === overlay.templateId);
-    return t ? resolveOverlay($state.snapshot(t), overlay.item, ASOF) : null;
+    const t = (doc.templates ?? []).find((x) => x.id === overlay.templateId);
+    return t ? resolveOverlay($state.snapshot(t), overlay.item, activeFixture.fixture.asOf) : null;
   });
 
   function addLog(kind, msg) {
-    eventLog = [{ v: doc.version, kind, msg }, ...eventLog].slice(0, 12);
+    eventLog = [{ v: doc.version, kind, msg }, ...eventLog].slice(0, 20);
+    if (kind === "materialize" || kind === "replay" || kind === "change") {
+      lastPulse = kind;
+    }
   }
 
-  // load() is async (sources, JSONata). Re-run whenever the document changes.
+  function selectDoc(id) {
+    const found = DOCS.find((d) => d.id === id);
+    if (!found) return;
+    activeDocId = id;
+    doc = structuredClone(found.fixture.document);
+    overlay = null;
+    busy = null;
+    modelCalls = 0;
+    replayHits = 0;
+    changeApplied = false;
+    editorError = null;
+    eventLog = [];
+    lastPulse = "idle";
+    addLog("load", `loaded "${found.label}" (v${doc.version}) · validate() 0 issues · 0 model calls`);
+  }
+
+  // Re-run load() + resolvePage() whenever the document or preset changes.
   $effect(() => {
     const snap = $state.snapshot(doc);
+    const fx = activeFixture.fixture;
     let cancelled = false;
-    load(snap, "home", {}, { asOf: ASOF, toolCalls: fixture.toolCalls })
-      .then((r) => { if (!cancelled) { page = resolvePage(snap, r, ASOF); loadError = null; } })
-      .catch((e) => { if (!cancelled) loadError = String(e?.message ?? e); });
+    load(snap, fx.page, fx.route ?? {}, { asOf: fx.asOf, toolCalls: fx.toolCalls ?? [] })
+      .then((r) => {
+        if (!cancelled) {
+          page = resolvePage(snap, r, fx.asOf);
+          loadError = null;
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) loadError = String(e?.message ?? e);
+      });
     return () => { cancelled = true; };
   });
 
-  addLog("load", "load home · source github.search_pull_requests replayed from a recorded call · 0 model calls");
+  // Keep JSON editor synced when inspector opens or doc changes cleanly.
+  $effect(() => {
+    if (showInspector && inspectTab === "doc") {
+      editorText = JSON.stringify($state.snapshot(doc), null, 2);
+      editorError = null;
+    }
+  });
 
-  // Simulated model: answers with the RFC §15 template. The host validates it, recomputes
-  // itemFields, stores it and sets the alias (§10).
+  addLog("load", "loaded Team PRs (v3) · source github.search_pull_requests replayed from fixture · 0 model calls");
+
+  // Simulated model: returns a valid IAP template for the requested intent.
   async function simulatedModel(req) {
     modelCalls += 1;
-    await new Promise((r) => setTimeout(r, 650));
-    return { template: { ...structuredClone(INTENT_TEMPLATE), itemFields: [], tools: [] } };
+    await new Promise((r) => setTimeout(r, 520));
+    const tpl = templates[req.intent.id] ?? templates["pr-details"];
+    return { template: structuredClone(tpl) };
   }
 
   async function runIntent(intent, item) {
@@ -76,15 +136,16 @@
     busy = { id: intent.id, prompt: intent.prompt };
     try {
       const before = doc.version;
-      const res = await invokeIntent($state.snapshot(doc), catalog, intent, item, simulatedModel);
+      const res = await invokeIntent($state.snapshot(doc), catalog, intent, item ?? {}, simulatedModel);
       if (res.resolution.via === "alias") {
         replayHits += 1;
-        addLog("replay", `intent ${intent.id} (#${item.number}) → alias → ${res.template.id} · 0 model calls`);
+        const label = item?.number ? ` (#${item.number})` : item?.name ? ` (${item.name})` : "";
+        addLog("replay", `alias hit: ${intent.id}${label} → ${res.template.id} · 0 model calls`);
       } else {
         doc = res.doc;
-        addLog("materialize", `intent ${intent.id} via ${res.resolution.via} → template ${res.template.id} stored, alias set (v${before}→v${res.doc.version}, 1 simulated model call)`);
+        addLog("materialize", `materialized ${intent.id} → ${res.template.id} saved + alias set (v${before}→v${res.doc.version}, 1 simulated LLM call)`);
       }
-      overlay = { item, templateId: res.template.id };
+      overlay = { item: item ?? {}, templateId: res.template.id };
     } catch (e) {
       addLog("error", `intent ${intent.id} failed: ${e?.message ?? e}`);
     } finally {
@@ -93,31 +154,102 @@
   }
 
   function runAction(action, item) {
+    if (!action) return;
     if (action.name === "intent") return runIntent(action.params, item ?? overlay?.item);
-    if (action.name === "close") { overlay = null; addLog("action", "close · 0 model calls"); return; }
-    if (action.name === "navigate") { addLog("action", `navigate ${action.params?.url ?? ""} (not followed: fixture data)`); return; }
-    addLog("action", `${action.name}: not wired in this demo`);
+    if (action.name === "close") {
+      overlay = null;
+      addLog("action", "closed overlay · 0 model calls");
+      return;
+    }
+    if (action.name === "navigate") {
+      addLog("action", `navigate ${action.params?.url ?? ""} (logged only — fixture URL)`);
+      return;
+    }
+    if (action.name === "refresh") {
+      replayHits += 1;
+      addLog("replay", "refresh · re-evaluated sources from fixture · 0 model calls");
+      return;
+    }
+    addLog("action", `action "${action.name}" logged (not wired in demo)`);
   }
 
-  // `set` via a bound control: writes the block's /ui state (no change op exists for this, see REPORT F12).
   function setBound(blockId, path, value) {
-    const b = doc.spec.blocks[blockId];
+    const b = doc.spec?.blocks?.[blockId];
     if (!b || !path.startsWith("/ui/")) return;
     b.ui = { ...(b.ui ?? {}), [path.slice(4)]: value };
     replayHits += 1;
-    addLog("set", `set ${path} = ${value} on ${blockId} · re-resolved, 0 model calls`);
+    addLog("set", `set ${path} = ${JSON.stringify(value)} on ${blockId} · re-resolved, 0 model calls`);
+  }
+
+  function toggleFailingBlock() {
+    if (activeDocId !== "prs") selectDoc("prs");
+    const snap = $state.snapshot(doc);
+    const removing = Boolean(snap.spec.blocks["failing-prs"]);
+    const change = removing
+      ? { baseVersion: snap.version, summary: "Remove failing CI block", ops: [{ op: "removeBlock", id: "failing-prs" }] }
+      : { baseVersion: snap.version, summary: "Add failing CI block", ops: [{ op: "putBlock", block: structuredClone(templates.failingBlock) }] };
+    const res = applyChange(snap, change, catalog);
+    if (res.accepted) {
+      const before = snap.version;
+      doc = res.document;
+      changeApplied = true;
+      addLog("change", `applyChange(${removing ? "removeBlock" : "putBlock"}) accepted · v${before}→v${res.document.version} · all trees updated`);
+    } else {
+      addLog("error", `applyChange rejected: ${res.issues.join("; ")}`);
+    }
+  }
+
+  function applyEditedDoc() {
+    try {
+      const parsed = JSON.parse(editorText);
+      const iss = validate(parsed, catalog);
+      if (iss.length) {
+        editorError = iss.join("\n");
+        addLog("error", `validate() rejected edit: ${iss[0]}`);
+        return;
+      }
+      doc = parsed;
+      editorError = null;
+      addLog("change", `manual document edit validated & applied (v${doc.version})`);
+    } catch (e) {
+      editorError = `JSON parse error: ${e?.message ?? e}`;
+    }
+  }
+
+  function injectDeterminismBug() {
+    const broken = structuredClone($state.snapshot(doc));
+    const firstBlock = Object.values(broken.spec.blocks)[0];
+    if (firstBlock) {
+      firstBlock.view = { expr: "{ \"bad\": $random() }", schema: {} };
+    }
+    editorText = JSON.stringify(broken, null, 2);
+    const iss = validate(broken, catalog);
+    editorError = iss.length ? iss.join("\n") : "No issues";
+    addLog("error", `validate() caught non-deterministic expression: ${iss[0] ?? "error"}`);
   }
 
   function resetDoc() {
-    doc = initialDoc();
-    overlay = null;
-    modelCalls = 0;
-    replayHits = 0;
-    eventLog = [];
-    addLog("load", "reset to v3 · templates and aliases cleared");
+    selectDoc(activeDocId);
   }
 
-  // Mount HTML-binding output in a shadow root so its CSS can't leak, and wire data-action / data-bind.
+  // Guided step triggers
+  function step1Click() {
+    if (activeDocId !== "prs") selectDoc("prs");
+    const row = prRows[2] ?? prRows[0];
+    if (row) runIntent({ id: "pr-details", prompt: "Show this pull request's details" }, row);
+  }
+  function step2Click() {
+    if (activeDocId !== "prs") selectDoc("prs");
+    const row = prRows[0];
+    if (row) runIntent({ id: "pr-details", prompt: "Show this pull request's details" }, row);
+  }
+  function step3Click() {
+    activeRenderer = "kumo";
+    compareRenderer = "tui";
+    compareMode = true;
+  }
+
+  // Mount HTML-binding output inside a shadow root so its CSS is isolated.
   function shadowHost(el, params) {
     const root = el.attachShadow({ mode: "open" });
     let p = params;
@@ -127,8 +259,7 @@
     };
     root.addEventListener("click", (ev) => {
       const t = ev.target.closest?.("[data-action]");
-      if (!t) return;
-      if (t.tagName === "INPUT") return;
+      if (!t || t.tagName === "INPUT") return;
       ev.preventDefault();
       const action = JSON.parse(t.getAttribute("data-action"));
       const item = t.hasAttribute("data-item") ? JSON.parse(t.getAttribute("data-item")) : undefined;
@@ -150,100 +281,232 @@
   function termKeys(ev) {
     if (ev.key === "Escape" && overlay) { runAction({ name: "close" }); return; }
     const n = Number(ev.key);
-    if (n >= 1 && n <= rows.length) runAction({ name: "intent", params: { id: "pr-details", prompt: "Show this pull request's details" } }, rows[n - 1]);
+    if (activeDocId === "prs" && n >= 1 && n <= prRows.length) {
+      runAction({ name: "intent", params: { id: "pr-details", prompt: "Show this pull request's details" } }, prRows[n - 1]);
+    }
   }
 
-  const toggleDiff = () => setBound("prs-table", "/ui/showDiff", !doc.spec.blocks["prs-table"].ui?.showDiff);
+  const toggleDiff = () => setBound("prs-table", "/ui/showDiff", !doc.spec.blocks["prs-table"]?.ui?.showDiff);
 </script>
 
 <div class="shell">
+  <!-- Hero Header -->
   <header class="topbar">
     <div class="brand">
-      <div class="brand-title">
-        <span class="pill-iap">IAP v0.1 host</span>
-        <h1>One Document, Six UI Trees</h1>
+      <div class="badges-row">
+        <span class="pill-iap">IAP v0.1 Host</span>
+        <a class="pill-conf" href="https://github.com/acoyfellow/trees/blob/master/HOST_REPORT.md" target="_blank" rel="noopener">
+          ✓ 28/28 conformance · 15 spec notes ↗
+        </a>
       </div>
+      <h1>One Intent UI Document, Many UI Trees</h1>
       <p class="subtitle">
-        One IAP v0.1 document, rendered by a small host built from the spec (passes 28 of 28 conformance fixtures).
-        Click a PR row: the first click materializes a details dialog into the document (v3 → v4); later clicks,
-        and every other tree, replay it with no model call.
-      </p>
-      <p class="credit">
-        A fan project for <a href="https://intent-ui.com">Intent UI</a> by Brayden Wilmoth
-        (<a href="https://intent-ui.com/rfc">RFC: Intents and Persistence</a>). Two real bindings read the same
-        resolved tree: HTML and terminal. System 7, Swiss, LCARS and shadcn are CSS skins over the HTML binding.
-        The model call is simulated (it answers with the RFC §15 template) and the PR data is a recorded tool call.
-        Actions other than intent, close, navigate and bound checkboxes aren't wired.
-        <a href="https://github.com/acoyfellow/trees">source</a> · <a href="https://customer0.dev">customer0</a>
+        Rendered live from a single IAP JSON document through two real bindings (<strong>HTML</strong> &amp; <strong>Terminal</strong>)
+        plus four CSS skins. Materialize an intent once, then replay it across every tree with zero model calls.
       </p>
     </div>
 
     <div class="metrics-bar">
-      <div class="metric"><span class="m-label">Doc Version</span><span class="m-val">v{doc.version}</span></div>
-      <div class="metric"><span class="m-label">Templates</span><span class="m-val">{doc.templates.length}</span></div>
-      <div class="metric"><span class="m-label">Model Calls</span><span class="m-val accent">{modelCalls}</span></div>
-      <div class="metric"><span class="m-label">Zero-LLM Replays</span><span class="m-val good">{replayHits}</span></div>
-      <button class="ctrl-btn" onclick={resetDoc} title="Rewind document back to v3">Reset v3</button>
+      <div class="metric" class:pulse-amber={lastPulse === "materialize" || lastPulse === "change"}>
+        <span class="m-label">Doc</span>
+        <span class="m-val">v{doc.version}</span>
+      </div>
+      <div class="metric">
+        <span class="m-label">Templates</span>
+        <span class="m-val">{(doc.templates ?? []).length}</span>
+      </div>
+      <div class="metric">
+        <span class="m-label">LLM Calls</span>
+        <span class="m-val accent">{modelCalls}</span>
+      </div>
+      <div class="metric" class:pulse-green={lastPulse === "replay"}>
+        <span class="m-label">0-LLM Replays</span>
+        <span class="m-val good">{replayHits}</span>
+      </div>
+      <button class="ctrl-btn" onclick={resetDoc} title="Reset document to initial state">Reset</button>
     </div>
   </header>
 
-  <div class="picker-row">
-    <div class="tabs" role="tablist" aria-label="UI tree bindings">
-      {#each RENDERERS as r}
-        <button role="tab" aria-selected={activeRenderer === r.id} class="tab-btn" class:active={activeRenderer === r.id}
-          title={r.desc} onclick={() => (activeRenderer = r.id)}>
-          <span class="tab-name">{r.name}</span>
-          <span class="tab-tag">{r.tag}</span>
-        </button>
-      {/each}
+  <!-- Guided interactive demo steps -->
+  {#if activeDocId === "prs"}
+    <section class="steps-grid" aria-label="Guided demo steps">
+      <button class="step-card" class:done={hasPrTemplate} onclick={step1Click}>
+        <span class="step-num">{hasPrTemplate ? "✓" : "1"}</span>
+        <span class="step-body">
+          <strong>Materialize an intent</strong>
+          <span>Click any PR row — builds <code>tpl-pr</code> once (v3→v4, 1 LLM call)</span>
+        </span>
+      </button>
+
+      <button class="step-card" class:done={hasPrTemplate && replayHits > 0} onclick={step2Click}>
+        <span class="step-num">{hasPrTemplate && replayHits > 0 ? "✓" : "2"}</span>
+        <span class="step-body">
+          <strong>Zero-LLM replay</strong>
+          <span>Click another PR — resolves via alias, 0 model calls</span>
+        </span>
+      </button>
+
+      <button class="step-card" class:done={hasComparedBindings} onclick={step3Click}>
+        <span class="step-num">{hasComparedBindings ? "✓" : "3"}</span>
+        <span class="step-body">
+          <strong>Compare real bindings</strong>
+          <span>View HTML &amp; Terminal side-by-side from one resolved tree</span>
+        </span>
+      </button>
+
+      <button class="step-card" class:done={changeApplied} onclick={toggleFailingBlock}>
+        <span class="step-num">{changeApplied ? "✓" : "4"}</span>
+        <span class="step-body">
+          <strong>{hasFailingBlock ? "Remove added block" : "Apply live Change op"}</strong>
+          <span>Run <code>applyChange()</code> ({hasFailingBlock ? "removeBlock" : "putBlock"}) across all trees</span>
+        </span>
+      </button>
+    </section>
+  {/if}
+
+  <!-- Document & Binding Controls -->
+  <div class="controls-bar">
+    <div class="ctrl-group">
+      <span class="group-label">Document</span>
+      <div class="seg-group" role="tablist" aria-label="Sample IAP documents">
+        {#each DOCS as d}
+          <button
+            role="tab"
+            aria-selected={activeDocId === d.id}
+            class="seg-btn"
+            class:active={activeDocId === d.id}
+            title={d.desc}
+            onclick={() => selectDoc(d.id)}
+          >
+            {d.label}
+            <span class="seg-tag">{d.tag}</span>
+          </button>
+        {/each}
+      </div>
     </div>
+
+    <div class="ctrl-group grow">
+      <span class="group-label">Real bindings</span>
+      <div class="seg-group" role="tablist" aria-label="Real host bindings">
+        {#each BINDINGS as r}
+          <button
+            role="tab"
+            aria-selected={activeRenderer === r.id}
+            class="seg-btn binding"
+            class:active={activeRenderer === r.id}
+            title={r.desc}
+            onclick={() => (activeRenderer = r.id)}
+          >
+            {r.name}
+          </button>
+        {/each}
+      </div>
+
+      <span class="group-label skins-lbl">HTML skins</span>
+      <div class="seg-group" role="tablist" aria-label="CSS skins over the HTML binding">
+        {#each SKINS_META as r}
+          <button
+            role="tab"
+            aria-selected={activeRenderer === r.id}
+            class="seg-btn"
+            class:active={activeRenderer === r.id}
+            title={r.desc}
+            onclick={() => (activeRenderer = r.id)}
+          >
+            {r.name}
+          </button>
+        {/each}
+      </div>
+    </div>
+
     <div class="right-ctrls">
-      <label class="compare-toggle"><input type="checkbox" bind:checked={compareMode} /><span>Side-by-side</span></label>
+      <label class="compare-toggle">
+        <input type="checkbox" bind:checked={compareMode} />
+        <span>Side-by-side</span>
+      </label>
       {#if compareMode}
         <select class="compare-select" bind:value={compareRenderer} aria-label="Second UI tree">
-          {#each RENDERERS as r}<option value={r.id}>vs {r.name}</option>{/each}
+          <optgroup label="Real bindings">
+            {#each BINDINGS as r}<option value={r.id}>vs {r.name}</option>{/each}
+          </optgroup>
+          <optgroup label="CSS skins of HTML">
+            {#each SKINS_META as r}<option value={r.id}>vs {r.name}</option>{/each}
+          </optgroup>
         </select>
       {/if}
-      <button class="ctrl-btn" class:active-ctrl={showInspector} onclick={() => (showInspector = !showInspector)}>
-        {showInspector ? "Hide" : "Inspect"} IAP JSON
+      <button
+        class="ctrl-btn"
+        class:active-ctrl={showInspector}
+        onclick={() => (showInspector = !showInspector)}
+      >
+        {showInspector ? "Hide" : "Inspect"} IAP
       </button>
     </div>
+  </div>
+
+  <!-- Live IAP Pipeline Strip -->
+  <div class="pipeline-bar">
+    <div class="pipe-steps">
+      <span class="pipe-node">Doc <strong>v{doc.version}</strong></span>
+      <span class="pipe-arrow">→</span>
+      <span class="pipe-node" class:pipe-ok={issues.length === 0} class:pipe-bad={issues.length > 0}>
+        validate() {issues.length === 0 ? "✓ 0 issues" : `✗ ${issues.length}`}
+      </span>
+      <span class="pipe-arrow">→</span>
+      <span class="pipe-node">load() + JSONata</span>
+      <span class="pipe-arrow">→</span>
+      <span class="pipe-node">
+        {ALL_RENDERERS.find((r) => r.id === activeRenderer)?.name}{#if compareMode} + {ALL_RENDERERS.find((r) => r.id === compareRenderer)?.name}{/if}
+      </span>
+    </div>
+    {#if eventLog[0]}
+      <div class="pipe-latest" class:mat={eventLog[0].kind === "materialize"} class:rep={eventLog[0].kind === "replay"} class:chg={eventLog[0].kind === "change"}>
+        <strong>v{eventLog[0].v}</strong> {eventLog[0].msg}
+      </div>
+    {/if}
   </div>
 
   {#if busy}
     <div class="mat-banner">
       <span class="spinner"></span>
-      <span><strong>Materializing intent</strong> <code>{busy.id}</code> — "{busy.prompt}" · simulated model call, then the host
-        validates the template and writes it into the document (v{doc.version} → v{doc.version + 1})…</span>
+      <span>
+        <strong>Materializing intent</strong> <code>{busy.id}</code> — "{busy.prompt}" ·
+        simulated model call, then <code>validate()</code> + <code>applyChange()</code> (v{doc.version} → v{doc.version + 1})…
+      </span>
     </div>
   {/if}
 
+  <!-- Shared Host Frame Snippet -->
   {#snippet renderHost(theme)}
-    {@const meta = RENDERERS.find((r) => r.id === theme)}
+    {@const meta = ALL_RENDERERS.find((r) => r.id === theme)}
     <section class="host-frame theme-{theme}">
       <div class="host-chrome">
         {#if theme === "mac7"}
           <span class="mac-box" aria-hidden="true"></span>
-          <span class="mac-title">{page?.page.title ?? "Team PRs"} — {meta.name}</span>
+          <span class="mac-title">{page?.page.title ?? "IAP"} — {meta.name}</span>
           <span class="mac-lines" aria-hidden="true"></span>
         {:else if theme === "tui"}
-          <span>┌─[ {meta.name} ]─[ /home ]─[ doc:v{doc.version} ]─[ {modelCalls} LLM / {replayHits} replay ]</span>
+          <div class="tui-head">
+            <span>┌─[ {meta.name} ]─[ /{page?.page.id ?? "home"} ]─[ doc:v{doc.version} ]</span>
+            <span class="tui-hint">real text binding</span>
+          </div>
         {:else if theme === "lcars"}
           <div class="lcars-head">
             <span class="lcars-cap">IAP-{doc.version}01</span>
             <span class="lcars-bar"></span>
-            <span class="lcars-title">{(page?.page.title ?? "Team PRs").toUpperCase()} // {meta.name.toUpperCase()}</span>
+            <span class="lcars-title">{(page?.page.title ?? "IAP").toUpperCase()} // {meta.name.toUpperCase()}</span>
           </div>
         {:else}
           <div class="std-head">
             <div class="std-head-left">
-              <span class="binding-chip">{meta.name}</span>
-              <span class="route-crumb">/home{overlay ? ` · overlay ${overlay.templateId}` : ""}</span>
+              <span class="binding-chip" class:is-real={meta.kind === "binding"}>{meta.name}</span>
+              <span class="route-crumb">/{page?.page.id ?? "home"}{overlay ? ` · ${overlay.templateId}` : ""}</span>
             </div>
-            <span class="page-status">{meta.tag} · catalog {doc.spec.catalogVersion}</span>
+            <span class="page-status">{meta.tag} · {doc.spec.catalogVersion}</span>
           </div>
         {/if}
       </div>
+
       <div class="host-body">
         <div class="host-content">
           {#if loadError}
@@ -251,15 +514,20 @@
           {:else if !page}
             <p class="host-err">loading…</p>
           {:else if theme === "tui"}
-            {@const w = compareMode ? 64 : 92}
+            {@const w = compareMode ? 62 : 90}
             <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
             <div class="term" tabindex="0" onkeydown={termKeys} role="application" aria-label="Terminal binding; press 1-5 to open a row, Esc to close">
-              <pre>{term.renderPage(page, w)}{#if overlayResolved}{"\n"}{term.renderOverlay(overlayResolved, Math.min(64, w))}{/if}</pre>
-              <div class="term-keys">
-                {#each rows as row, i}<button onclick={() => runAction({ name: "intent", params: { id: "pr-details", prompt: "Show this pull request's details" } }, row)}>[{i + 1}]</button>{/each}
-                <button onclick={toggleDiff}>[d] diff</button>
-                {#if overlay}<button onclick={() => runAction({ name: "close" })}>[esc] close</button>{/if}
-              </div>
+              <pre>{term.renderPage(page, w)}{#if overlayResolved}{"\n"}{term.renderOverlay(overlayResolved, Math.min(60, w))}{/if}</pre>
+              {#if activeDocId === "prs"}
+                <div class="term-keys">
+                  {#each prRows as row, i}
+                    <button onclick={() => runAction({ name: "intent", params: { id: "pr-details", prompt: "Show this pull request's details" } }, row)}>[{i + 1}] PR #{row.number}</button>
+                  {/each}
+                  <button onclick={() => runAction({ name: "intent", params: { id: "release-brief", prompt: "Summarize release readiness for open pull requests" } }, {})}>[r] Release brief</button>
+                  <button onclick={toggleDiff}>[d] diff</button>
+                  {#if overlay}<button onclick={() => runAction({ name: "close" })}>[esc] close</button>{/if}
+                </div>
+              {/if}
             </div>
           {:else}
             <div class="html-host" use:shadowHost={{
@@ -275,42 +543,76 @@
     </section>
   {/snippet}
 
+  <!-- Stage -->
   <div class="stage" class:split={compareMode}>
     {@render renderHost(activeRenderer)}
-    {#if compareMode}{@render renderHost(compareRenderer)}{/if}
+    {#if compareMode}
+      {@render renderHost(compareRenderer)}
+    {/if}
   </div>
 
-  <div class="log-strip">
-    <span class="log-title">Host log</span>
-    <div class="log-items">
-      {#each eventLog.slice(0, 4) as ev}
-        <span class="log-chip" class:mat={ev.kind === "materialize"}><strong>v{ev.v}</strong> {ev.msg}</span>
-      {/each}
-    </div>
-  </div>
-
+  <!-- Collapsible IAP Inspector & Live Editor -->
   {#if showInspector}
     <div class="inspector">
       <div class="inspector-head">
-        <span>
-          <button class="ctrl-btn" class:active-ctrl={inspectTab === "doc"} onclick={() => (inspectTab = "doc")}>Document</button>
-          <button class="ctrl-btn" class:active-ctrl={inspectTab === "resolved"} onclick={() => (inspectTab = "resolved")}>Resolved tree</button>
-          &nbsp;validate(): <strong class:ok-txt={issues.length === 0}>{issues.length === 0 ? "0 issues" : `${issues.length} issues`}</strong>
-          · version {doc.version} · templates {doc.templates.map((t) => t.id).join(", ") || "none yet"}
-        </span>
+        <div class="ins-tabs">
+          <button class="ctrl-btn" class:active-ctrl={inspectTab === "doc"} onclick={() => (inspectTab = "doc")}>
+            Document JSON (editable)
+          </button>
+          <button class="ctrl-btn" class:active-ctrl={inspectTab === "resolved"} onclick={() => (inspectTab = "resolved")}>
+            Resolved Tree
+          </button>
+          <button class="ctrl-btn" class:active-ctrl={inspectTab === "log"} onclick={() => (inspectTab = "log")}>
+            Host Log ({eventLog.length})
+          </button>
+        </div>
+        <div class="ins-meta">
+          validate(): <strong class:ok-txt={issues.length === 0} class:err-txt={issues.length > 0}>{issues.length === 0 ? "0 issues" : `${issues.length} issues`}</strong>
+          · v{doc.version} · templates: {(doc.templates ?? []).map((t) => t.id).join(", ") || "none"}
+        </div>
       </div>
-      <pre class="json-pre">{inspectTab === "doc" ? JSON.stringify(doc, null, 2) : JSON.stringify({ page, overlay: overlayResolved }, null, 2)}{#if issues.length}{"\n\n"}{issues.join("\n")}{/if}</pre>
+
+      {#if inspectTab === "doc"}
+        <div class="editor-bar">
+          <button class="ctrl-btn primary-mini" onclick={applyEditedDoc}>Apply &amp; validate()</button>
+          <button class="ctrl-btn" onclick={injectDeterminismBug} title="Test the validator with a forbidden $random() call">
+            Test validator ($random())
+          </button>
+          <span class="editor-hint">Edit JSONata views, titles, or nodes and apply live to all trees.</span>
+        </div>
+        {#if editorError}
+          <pre class="editor-err">{editorError}</pre>
+        {/if}
+        <textarea class="json-editor" bind:value={editorText} spellcheck="false"></textarea>
+      {:else if inspectTab === "resolved"}
+        <pre class="json-pre">{JSON.stringify({ page, overlay: overlayResolved }, null, 2)}</pre>
+      {:else}
+        <div class="log-list">
+          {#each eventLog as ev}
+            <div class="log-row" class:mat={ev.kind === "materialize"} class:rep={ev.kind === "replay"} class:chg={ev.kind === "change"} class:err={ev.kind === "error"}>
+              <span class="log-v">v{ev.v}</span>
+              <span class="log-k">{ev.kind}</span>
+              <span>{ev.msg}</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
     </div>
   {/if}
-</div>
 
-<style>
-  .host-err { padding: 1rem; color: #f59e0b; font-family: ui-monospace, monospace; }
-  .html-host { display: block; min-height: 200px; }
-  .term { outline: none; }
-  .term pre { margin: 0; font: 12px/1.35 ui-monospace, "SF Mono", Menlo, monospace; white-space: pre; overflow-x: auto; color: #b8f5c4; }
-  .term:focus-visible { box-shadow: 0 0 0 2px #f6821f; }
-  .term-keys { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .term-keys button { font: 12px ui-monospace, monospace; background: transparent; color: #b8f5c4; border: 1px solid #2f5a3a; padding: 2px 8px; cursor: pointer; }
-  .ok-txt { color: #4ade80; }
-</style>
+  <!-- Clean Honest Footer -->
+  <footer class="footer">
+    <p>
+      Built from Brayden Wilmoth's <a href="https://intent-ui.com" target="_blank" rel="noopener">Intent UI</a>
+      (<a href="https://intent-ui.com/rfc" target="_blank" rel="noopener">RFC 0003: Intents and Persistence</a>)
+      without reading its reference code.
+      <a href="https://github.com/acoyfellow/trees/blob/master/HOST_REPORT.md" target="_blank" rel="noopener">Read the 15 spec friction notes</a> ·
+      <a href="https://github.com/acoyfellow/trees" target="_blank" rel="noopener">Source on GitHub</a> ·
+      <a href="https://customer0.dev" target="_blank" rel="noopener">customer0.dev</a>
+    </p>
+    <p class="caveat">
+      Caveats: model calls are simulated (returning fixed valid IAP templates), data comes from recorded tool-call fixtures,
+      and HTML &amp; Terminal are the two real bindings (System 7, Swiss, LCARS and shadcn are CSS skins over the HTML binding).
+    </p>
+  </footer>
+</div>

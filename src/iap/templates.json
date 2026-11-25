@@ -1,0 +1,107 @@
+{
+  "pr-details": {
+    "id": "tpl-pr",
+    "intentId": "pr-details",
+    "prompt": "Show this pull request's details",
+    "summary": "Pull request metadata, CI status, diff size and link.",
+    "itemFields": [],
+    "tools": [],
+    "root": "d",
+    "nodes": {
+      "d": {
+        "type": "Dialog",
+        "props": {
+          "title": { "path": "$item/title" },
+          "description": "Materialized once into the IAP document, then replayed for any PR with 0 model calls.",
+          "dismissLabel": "Close"
+        },
+        "children": ["kv", "go"]
+      },
+      "kv": {
+        "type": "KeyValueList",
+        "props": {
+          "items": [
+            { "label": "Repository", "value": { "path": "$item/repo" } },
+            { "label": "Author", "value": { "path": "$item/author" } },
+            { "label": "CI Status", "value": { "path": "$item/ci" } },
+            { "label": "Diff", "value": { "path": "$item/diff" } },
+            { "label": "Updated", "value": { "path": "$item/updated" }, "format": "relative" }
+          ]
+        }
+      },
+      "go": {
+        "type": "DialogAction",
+        "props": { "label": "Open on GitHub" },
+        "action": { "name": "navigate", "params": { "url": { "path": "$item/url" } } }
+      }
+    }
+  },
+  "release-brief": {
+    "id": "tpl-release",
+    "intentId": "release-brief",
+    "prompt": "Summarize release readiness for open pull requests",
+    "summary": "Release readiness checklist and blocker summary.",
+    "itemFields": [],
+    "tools": [],
+    "root": "d",
+    "nodes": {
+      "d": {
+        "type": "Dialog",
+        "props": {
+          "title": "Release readiness brief",
+          "description": "Second lazy intent materialized into the same IAP document.",
+          "dismissLabel": "Close"
+        },
+        "children": ["kv", "note", "ok"]
+      },
+      "kv": {
+        "type": "KeyValueList",
+        "props": {
+          "items": [
+            { "label": "Status", "value": "Blocked by 2 failing CI checks" },
+            { "label": "Blockers", "value": "#24 (edge KV TTL) · #34 (cycle guard)" },
+            { "label": "Ready to merge", "value": "#12, #19, #31 (3 PRs passing)" }
+          ]
+        }
+      },
+      "note": {
+        "type": "Text",
+        "props": {
+          "text": "Next click on Release brief replays this template via alias — 0 model calls.",
+          "variant": "secondary",
+          "size": "sm"
+        }
+      },
+      "ok": {
+        "type": "DialogAction",
+        "props": { "label": "Done" },
+        "action": { "name": "close" }
+      }
+    }
+  },
+  "failingBlock": {
+    "id": "failing-prs",
+    "page": "home",
+    "slot": "main",
+    "order": 2,
+    "title": "Failing CI (added via applyChange)",
+    "inputs": { "prs": "prs" },
+    "view": {
+      "expr": "{ \"rows\": $prs[ci = \"failing\"] }",
+      "schema": {}
+    },
+    "ui": {},
+    "root": "ft",
+    "nodes": {
+      "ft": {
+        "type": "DataTable",
+        "props": { "rows": { "path": "/rows" }, "rowKey": "url" },
+        "children": ["fc1", "fc2", "fc3"],
+        "action": { "name": "intent", "params": { "id": "pr-details", "prompt": "Show this pull request's details" } }
+      },
+      "fc1": { "type": "DataColumn", "props": { "header": "Failing PR", "field": "title", "subField": "repo" } },
+      "fc2": { "type": "DataColumn", "props": { "header": "Author", "field": "author" } },
+      "fc3": { "type": "DataColumn", "props": { "header": "Diff", "field": "diff", "align": "right" } }
+    }
+  }
+}

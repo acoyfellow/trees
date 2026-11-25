@@ -1,0 +1,117 @@
+{
+  "name": "showcase",
+  "asOf": "2026-11-07T12:00:00Z",
+  "page": "team",
+  "route": { "q": "core" },
+  "toolCalls": [
+    { "connection": "acme", "tool": "list_people", "args": { "team": "core" },
+      "result": { "employees": [
+        { "id": "e1", "full_name": "Ada Lovelace", "title": "Engineer", "lead": false, "joined": "2026-10-01T09:00:00Z", "commits": 1520, "profile": "https://example.com/ada" },
+        { "id": "e2", "full_name": "Grace Hopper", "title": "Lead", "lead": true, "joined": "2026-11-05T12:00:00Z", "commits": 98231, "profile": "https://example.com/grace" },
+        { "id": "e3", "full_name": "Katherine Johnson", "title": "Analyst", "lead": false, "joined": "2026-11-07T09:00:00Z", "commits": 7, "profile": "https://example.com/kj" }
+      ] } }
+  ],
+  "document": {
+    "iap": "0.1",
+    "version": 1,
+    "spec": {
+      "specVersion": 0,
+      "catalogVersion": "kumo@2.17",
+      "pages": {
+        "team": {
+          "id": "team", "title": "Team directory",
+          "params": { "q": { "description": "Team to show", "example": "core", "optional": true } },
+          "layout": { "root": "shell", "nodes": {
+            "shell": { "kind": "html", "tag": "main", "className": "grid gap-6", "children": ["intro", "main"] },
+            "intro": { "kind": "html", "tag": "p", "className": "text-sm", "text": "Every catalog type in one page. Data comes from a recorded tool call." },
+            "main": { "kind": "slot" }
+          } }
+        }
+      },
+      "sources": {
+        "people": {
+          "kind": "tool", "id": "people", "connection": "acme", "tool": "list_people",
+          "args": { "team": { "expr": "$route.q" } },
+          "when": "$route.q",
+          "normalize": "employees.{ \"id\": id, \"name\": full_name, \"title\": title, \"lead\": lead, \"joined\": joined, \"commits\": commits, \"url\": profile }",
+          "key": "id", "schema": {}
+        }
+      },
+      "blocks": {
+        "people": {
+          "id": "people", "page": "team", "slot": "main", "order": 0, "title": "Core team",
+          "inputs": { "people": "people" },
+          "view": { "expr": "{ \"rows\": $people, \"count\": $count($people), \"commits\": $sum($people.commits), \"newest\": $people[$count($people)-1].joined }", "schema": {} },
+          "frame": { "sources": false, "freshness": false },
+          "ui": { "selected": ["e2"], "hideTitle": false },
+          "toolbar": "tb",
+          "root": "s",
+          "nodes": {
+            "tb": { "type": "Stack", "props": { "direction": "row", "gap": "sm", "align": "center" }, "children": ["src", "upd", "cols", "refresh"] },
+            "src": { "type": "BlockSources", "props": {} },
+            "upd": { "type": "BlockUpdated", "props": { "prefix": "Synced " } },
+            "cols": { "type": "Popover", "props": { "label": "Columns", "title": "Show columns", "variant": "ghost" }, "children": ["cb"] },
+            "cb": { "type": "Checkbox", "props": { "label": "Title", "bind": "/ui/hideTitle", "invert": true } },
+            "refresh": { "type": "Button", "props": { "label": "Refresh", "size": "sm" }, "action": { "name": "refresh" } },
+            "s": { "type": "Stack", "props": { "gap": "lg" }, "children": ["stats", "search", "table", "selCount"] },
+            "stats": { "type": "Stack", "props": { "direction": "row", "gap": "lg" }, "children": ["st1", "st2", "st3"] },
+            "st1": { "type": "Stat", "props": { "label": "Members", "value": { "path": "/count" }, "hint": "People on the team" } },
+            "st2": { "type": "Stat", "props": { "label": "Commits", "value": { "path": "/commits" }, "format": "compact", "hint": "All time" } },
+            "st3": { "type": "Stat", "props": { "label": "Newest", "value": { "path": "/newest" }, "format": "relative" } },
+            "search": { "type": "TextInput", "props": { "label": "Team", "bind": "/route/q", "type": "search", "placeholder": "Team name" } },
+            "table": { "type": "DataTable", "props": { "rows": { "path": "/rows" }, "rowKey": "id", "selectionBind": "/ui/selected" },
+              "children": ["c-name", "c-title", "c-commits", "c-role", "c-menu"],
+              "action": { "name": "intent", "params": { "id": "person-details", "prompt": "Show this person's details" } } },
+            "c-name": { "type": "DataColumn", "props": { "header": "Name", "field": "name", "subField": "id", "linkField": "url" } },
+            "c-title": { "type": "DataColumn", "props": { "header": "Title", "field": "title" }, "visible": { "not": { "path": "/ui/hideTitle" } } },
+            "c-commits": { "type": "DataColumn", "props": { "header": "Commits", "field": "commits", "format": "number", "align": "right" } },
+            "c-role": { "type": "DataColumn", "props": { "header": "Role" }, "children": ["b-lead", "b-ic"] },
+            "b-lead": { "type": "Badge", "props": { "text": "lead", "variant": "success" }, "visible": { "path": "$item/lead" } },
+            "b-ic": { "type": "Badge", "props": { "text": "member" }, "visible": { "not": { "path": "$item/lead" } } },
+            "c-menu": { "type": "DataColumn", "props": { "header": "" }, "children": ["menu"] },
+            "menu": { "type": "ActionMenu", "props": { "label": "Actions" }, "children": ["mi-edit", "mi-remove"] },
+            "mi-edit": { "type": "MenuItem", "props": { "label": "Edit" }, "action": { "name": "set", "params": { "path": "/ui/editing", "value": { "path": "$item/id" } } } },
+            "mi-remove": { "type": "MenuItem", "props": { "label": "Remove", "variant": "danger" }, "action": { "name": "tool", "params": { "connection": "acme", "tool": "remove_person", "id": { "path": "$item/id" } } } },
+            "selCount": { "type": "Text", "props": { "text": { "path": "/ui/selected" }, "format": "count", "suffix": " selected", "variant": "secondary", "size": "sm" } }
+          }
+        },
+        "edit": {
+          "id": "edit", "page": "team", "slot": "main", "order": 1, "title": "Edit dialog (open via /ui/editing)",
+          "inputs": { "people": "people" },
+          "view": { "expr": "{ \"person\": $people[id = \"e2\"] }", "schema": {} },
+          "frame": { "style": "plain", "title": false, "sources": false, "freshness": false },
+          "ui": { "editing": "e2" },
+          "root": "dlg",
+          "nodes": {
+            "dlg": { "type": "Dialog", "props": { "title": { "path": "/person/name" }, "description": "Update this person's record.", "dismissLabel": "Cancel" },
+              "visible": { "path": "/ui/editing" }, "children": ["kv", "form", "save"] },
+            "kv": { "type": "KeyValueList", "props": { "items": [
+              { "label": "Joined", "value": { "path": "/person/joined" }, "format": "date" },
+              { "label": "Commits", "value": { "path": "/person/commits" }, "format": "number" } ] } },
+            "form": { "type": "RecordForm", "props": { "fields": [
+              { "name": "name", "label": "Name", "value": { "path": "/person/name" }, "required": true },
+              { "name": "title", "label": "Title", "value": { "path": "/person/title" } },
+              { "name": "bio", "label": "Bio", "type": "textarea", "description": "Shown on the profile." } ], "submitLabel": "Save" },
+              "action": { "name": "tool", "params": { "connection": "acme", "tool": "update_person", "id": "e2" } } },
+            "save": { "type": "DialogAction", "props": { "label": "Save and close" }, "children": ["save-more"],
+              "action": { "name": "tool", "params": { "connection": "acme", "tool": "update_person", "id": "e2" } } },
+            "save-more": { "type": "MenuItem", "props": { "label": "Save and notify" }, "action": { "name": "tool", "params": { "connection": "acme", "tool": "notify", "id": "e2" } } }
+          }
+        }
+      }
+    },
+    "templates": [
+      { "id": "tpl-person", "intentId": "person-details", "prompt": "Show this person's details", "summary": "Person card",
+        "itemFields": ["commits", "joined", "name", "title", "url"], "tools": [], "root": "d",
+        "nodes": {
+          "d": { "type": "Dialog", "props": { "title": { "path": "$item/name" }, "description": { "path": "$item/title" }, "dismissLabel": "Close" }, "children": ["kv", "note", "go"] },
+          "kv": { "type": "KeyValueList", "props": { "items": [
+            { "label": "Joined", "value": { "path": "$item/joined" }, "format": "relative" },
+            { "label": "Commits", "value": { "path": "$item/commits" }, "format": "compact" } ] } },
+          "note": { "kind": "html", "tag": "p", "text": "Profile data comes from the acme directory." },
+          "go": { "type": "DialogAction", "props": { "label": "Open profile" }, "action": { "name": "navigate", "params": { "url": { "path": "$item/url" } } } }
+        } }
+    ],
+    "aliases": { "[\"person-details\",\"Show this person's details\"]": "tpl-person" }
+  }
+}

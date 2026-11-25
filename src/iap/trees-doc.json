@@ -50,8 +50,14 @@
           "inputs": { "prs": "prs" },
           "view": { "expr": "{ \"open\": $count($prs), \"failing\": $count($prs[ci = \"failing\"]), \"passing\": $count($prs[ci = \"passing\"]) }", "schema": {} },
           "ui": {},
+          "toolbar": "sum-tb",
           "root": "stats",
           "nodes": {
+            "sum-tb": {
+              "type": "Button",
+              "props": { "label": "✦ Release brief", "variant": "primary", "size": "sm" },
+              "action": { "name": "intent", "params": { "id": "release-brief", "prompt": "Summarize release readiness for open pull requests" } }
+            },
             "stats": { "type": "Stack", "props": { "direction": "row", "gap": "lg" }, "children": ["s1", "s2", "s3"] },
             "s1": { "type": "Stat", "props": { "label": "Open PRs", "value": { "path": "/open" } } },
             "s2": { "type": "Stat", "props": { "label": "CI passing", "value": { "path": "/passing" } } },
