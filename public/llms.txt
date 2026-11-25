@@ -1,6 +1,6 @@
 # trees
 
-> A mock-up of the Intent UI idea (one document, many UI trees), skinned six ways: Kumo-like, terminal, System 7, Swiss print, LCARS and shadcn. It is not an IAP host.
+> One Intent UI (IAP v0.1) document, rendered by a small IAP host built from the spec and its conformance fixtures, through two real bindings (HTML and terminal) and four CSS skins over the HTML binding.
 
 - Live: https://trees.customer0.dev
 - Source: https://github.com/acoyfellow/trees
@@ -8,13 +8,15 @@
 
 ## What it shows
 
-- Clicking a row or button marked as an unbuilt intent "builds" a page once (simulated model call, version bump).
-- Switching skins, or opening two side by side, shows the built page with no new model calls.
-- The JSON panel shows an illustrative IAP-style document that changes as you click.
+- The page is rendered from the document: validate() → load() (tool source replayed from a recorded call, JSONata normalize and views) → resolved tree → binding. No screen is hand-written.
+- The host in src/iap/host passes 28 of 28 IAP v0.1 conformance fixtures (validate 9, render 7, change 7, intent 5). It was written from the spec and fixtures only, without reading the reference implementation.
+- Clicking a PR row runs the `pr-details` intent. The first click materializes a template (simulated model call), the host validates it, stores it and sets an alias (document v3 → v4). Later clicks, and every other tree, resolve through the alias with no model call.
+- The "Show diff" checkbox writes block /ui state; both bindings re-resolve and hide the column.
+- The inspector shows the live document, validate() output and the resolved tree.
 
 ## Caveats
 
-- Not an IAP host: screens are hand-written Svelte; nothing is rendered from the JSON. No JSONata, source evaluation, validation or change pipeline.
-- The JSON only loosely follows IAP v0.1; some fields (catalogVersion value, aliases shape) are made up.
-- The six trees are CSS skins over one component set, not separate component libraries, so this does not test the catalog-agnostic claim.
-- Model calls are simulated; there is no LLM behind it. Data is a fixed fixture.
+- The model call is simulated: it answers with the RFC §15 worked-example template.
+- PR data is a fixed recorded tool call, not GitHub.
+- Only two bindings are real (HTML, terminal). System 7, Swiss, LCARS and shadcn are CSS skins over the HTML binding's markup.
+- Actions other than intent, close, navigate (logged, not followed) and bound checkboxes aren't wired. The fixtures don't test actions either.

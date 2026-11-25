@@ -1,0 +1,94 @@
+{
+  "name": "trees",
+  "asOf": "2026-11-07T12:00:00Z",
+  "page": "home",
+  "toolCalls": [
+    {
+      "connection": "github",
+      "tool": "search_pull_requests",
+      "args": { "query": "is:open is:pr org:acme" },
+      "result": {
+        "items": [
+          { "number": 12, "repository_url": "https://api.github.com/repos/acme/api", "title": "Fix retries on transient 502s", "user": { "login": "ada" }, "html_url": "https://github.com/acme/api/pull/12", "ci": "passing", "additions": 48, "deletions": 19, "updated_at": "2026-11-07T11:48:00Z" },
+          { "number": 19, "repository_url": "https://api.github.com/repos/acme/web", "title": "Stream block patches over SSE", "user": { "login": "brayden" }, "html_url": "https://github.com/acme/web/pull/19", "ci": "passing", "additions": 312, "deletions": 84, "updated_at": "2026-11-07T11:22:00Z" },
+          { "number": 24, "repository_url": "https://api.github.com/repos/acme/edge", "title": "Tighten Worker KV cache TTL for catalogs", "user": { "login": "jordan" }, "html_url": "https://github.com/acme/edge/pull/24", "ci": "failing", "additions": 27, "deletions": 9, "updated_at": "2026-11-07T11:00:00Z" },
+          { "number": 31, "repository_url": "https://api.github.com/repos/acme/sdk", "title": "Pin $now() to the load's asOf", "user": { "login": "lin" }, "html_url": "https://github.com/acme/sdk/pull/31", "ci": "passing", "additions": 91, "deletions": 12, "updated_at": "2026-11-07T10:05:00Z" },
+          { "number": 34, "repository_url": "https://api.github.com/repos/acme/api", "title": "Guard against source dependency cycles", "user": { "login": "sam" }, "html_url": "https://github.com/acme/api/pull/34", "ci": "failing", "additions": 64, "deletions": 4, "updated_at": "2026-11-07T09:10:00Z" }
+        ]
+      }
+    }
+  ],
+  "document": {
+    "iap": "0.1",
+    "version": 3,
+    "spec": {
+      "specVersion": 0,
+      "catalogVersion": "kumo@2.17",
+      "pages": {
+        "home": { "id": "home", "title": "Team PRs", "params": {}, "layout": { "root": "main", "nodes": { "main": { "kind": "slot" } } } }
+      },
+      "sources": {
+        "prs": {
+          "kind": "tool",
+          "id": "prs",
+          "connection": "github",
+          "tool": "search_pull_requests",
+          "args": { "query": "is:open is:pr org:acme" },
+          "normalize": "items.{ \"number\": number, \"repo\": $split(repository_url, \"/\")[-1], \"title\": title, \"author\": user.login, \"url\": html_url, \"ci\": ci, \"diff\": \"+\" & $string(additions) & \" −\" & $string(deletions), \"updated\": updated_at }",
+          "key": "url",
+          "schema": {}
+        }
+      },
+      "blocks": {
+        "prs-summary": {
+          "id": "prs-summary",
+          "page": "home",
+          "slot": "main",
+          "order": 0,
+          "title": "Overview",
+          "frame": { "sources": false, "freshness": false },
+          "inputs": { "prs": "prs" },
+          "view": { "expr": "{ \"open\": $count($prs), \"failing\": $count($prs[ci = \"failing\"]), \"passing\": $count($prs[ci = \"passing\"]) }", "schema": {} },
+          "ui": {},
+          "root": "stats",
+          "nodes": {
+            "stats": { "type": "Stack", "props": { "direction": "row", "gap": "lg" }, "children": ["s1", "s2", "s3"] },
+            "s1": { "type": "Stat", "props": { "label": "Open PRs", "value": { "path": "/open" } } },
+            "s2": { "type": "Stat", "props": { "label": "CI passing", "value": { "path": "/passing" } } },
+            "s3": { "type": "Stat", "props": { "label": "CI failing", "value": { "path": "/failing" } } }
+          }
+        },
+        "prs-table": {
+          "id": "prs-table",
+          "page": "home",
+          "slot": "main",
+          "order": 1,
+          "title": "Open pull requests",
+          "inputs": { "prs": "prs" },
+          "view": { "expr": "{ \"rows\": $prs }", "schema": {} },
+          "ui": { "showDiff": true },
+          "toolbar": "tb",
+          "root": "t",
+          "nodes": {
+            "tb": { "type": "Checkbox", "props": { "label": "Show diff", "bind": "/ui/showDiff" } },
+            "t": {
+              "type": "DataTable",
+              "props": { "rows": { "path": "/rows" }, "rowKey": "url" },
+              "children": ["c1", "c2", "c3", "c4", "c5"],
+              "action": { "name": "intent", "params": { "id": "pr-details", "prompt": "Show this pull request's details" } }
+            },
+            "c1": { "type": "DataColumn", "props": { "header": "Title", "field": "title", "subField": "repo" } },
+            "c2": { "type": "DataColumn", "props": { "header": "Author", "field": "author" } },
+            "c3": { "type": "DataColumn", "props": { "header": "CI" }, "children": ["ok", "bad"] },
+            "ok": { "type": "Badge", "props": { "text": "passing", "variant": "success" }, "visible": { "eq": [{ "path": "$item/ci" }, "passing"] } },
+            "bad": { "type": "Badge", "props": { "text": "failing", "variant": "error" }, "visible": { "eq": [{ "path": "$item/ci" }, "failing"] } },
+            "c4": { "type": "DataColumn", "props": { "header": "Diff", "field": "diff" }, "visible": { "path": "/ui/showDiff" } },
+            "c5": { "type": "DataColumn", "props": { "header": "Updated", "field": "updated", "format": "relative", "align": "right" } }
+          }
+        }
+      }
+    },
+    "templates": [],
+    "aliases": {}
+  }
+}
