@@ -9,6 +9,8 @@
   import { resolvePage, resolveOverlay } from "./iap/host/core/page.ts";
   import * as html from "./iap/host/renderers/html.ts";
   import * as term from "./iap/host/renderers/terminal.ts";
+  import { mount as mountCloudterm } from "cloudterm";
+  import { colorizePage, colorizeOverlay } from "./ansi.js";
   import { SKINS } from "./skins.js";
 
   const catalog = loadCatalog();
@@ -21,7 +23,7 @@
 
   const BINDINGS = [
     { id: "kumo", name: "Kumo", tag: "HTML binding", kind: "binding", desc: "Real HTML renderer for kumo@2.17" },
-    { id: "tui", name: "Terminal", tag: "Text binding", kind: "binding", desc: "Real plain-text renderer from the same resolved tree" }
+    { id: "tui", name: "Terminal", tag: "cloudterm", kind: "binding", desc: "Real text binding rendered inside cloudterm" }
   ];
 
   const SKINS_META = [
@@ -278,12 +280,77 @@
     return { update(next) { p = next; paint(); } };
   }
 
-  function termKeys(ev) {
-    if (ev.key === "Escape" && overlay) { runAction({ name: "close" }); return; }
-    const n = Number(ev.key);
-    if (activeDocId === "prs" && n >= 1 && n <= prRows.length) {
-      runAction({ name: "intent", params: { id: "pr-details", prompt: "Show this pull request's details" } }, prRows[n - 1]);
-    }
+  function cloudtermHost(el, params) {
+    let p = params;
+    let ct = null;
+    let disposed = false;
+    let cols = 72;
+    const decoder = new TextDecoder();
+
+    const draw = () => {
+      if (!ct || disposed || !p.page) return;
+      const w = Math.max(44, Math.min(100, cols - 1));
+      let frame = "\x1b[?25l\x1b[2J\x1b[H" + colorizePage(term.renderPage(p.page, w));
+      if (p.overlayResolved) {
+        frame += "\r\n" + colorizeOverlay(term.renderOverlay(p.overlayResolved, Math.min(62, w)));
+      }
+      ct.write(frame);
+    };
+
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => {
+      if (ct && !disposed) ct.fit();
+    }) : null;
+    ro?.observe(el);
+
+    mountCloudterm(el, {
+      theme: {
+        background: "#07110a",
+        foreground: "#c7f5d2",
+        cursor: "#4ade80",
+        fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+        fontSize: typeof window !== "undefined" && window.innerWidth < 600 ? 10 : 12
+      },
+      onResize(nextCols) {
+        if (nextCols && nextCols !== cols) {
+          cols = nextCols;
+          draw();
+        }
+      },
+      onData(bytes) {
+        const key = decoder.decode(bytes);
+        if ((key === "\x1b" || key === "q" || key === "Q") && p.hasOverlay) {
+          p.onClose();
+          return;
+        }
+        if (p.activeDocId === "prs") {
+          const n = Number(key);
+          if (n >= 1 && n <= p.rows.length) {
+            p.onRow(p.rows[n - 1]);
+            return;
+          }
+          if (key === "r" || key === "R") { p.onRelease(); return; }
+          if (key === "d" || key === "D") { p.onToggleDiff(); return; }
+        }
+      }
+    }).then((instance) => {
+      if (disposed) { instance.destroy(); return; }
+      ct = instance;
+      cols = instance.cols || cols;
+      draw();
+    });
+
+    return {
+      update(next) {
+        p = next;
+        draw();
+      },
+      destroy() {
+        disposed = true;
+        ro?.disconnect();
+        ct?.destroy();
+        ct = null;
+      }
+    };
   }
 
   const toggleDiff = () => setBound("prs-table", "/ui/showDiff", !doc.spec.blocks["prs-table"]?.ui?.showDiff);
@@ -488,7 +555,7 @@
         {:else if theme === "tui"}
           <div class="tui-head">
             <span>┌─[ {meta.name} ]─[ /{page?.page.id ?? "home"} ]─[ doc:v{doc.version} ]</span>
-            <span class="tui-hint">real text binding</span>
+            <a class="tui-hint" href="https://github.com/acoyfellow/cloudterm" target="_blank" rel="noopener">powered by cloudterm ↗</a>
           </div>
         {:else if theme === "lcars"}
           <div class="lcars-head">
@@ -514,12 +581,24 @@
           {:else if !page}
             <p class="host-err">loading…</p>
           {:else if theme === "tui"}
-            {@const w = compareMode ? 62 : 90}
-            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-            <div class="term" tabindex="0" onkeydown={termKeys} role="application" aria-label="Terminal binding; press 1-5 to open a row, Esc to close">
-              <pre>{term.renderPage(page, w)}{#if overlayResolved}{"\n"}{term.renderOverlay(overlayResolved, Math.min(60, w))}{/if}</pre>
+            <div class="term">
+              <div
+                class="cloudterm-box"
+                use:cloudtermHost={{
+                  page,
+                  overlayResolved,
+                  activeDocId,
+                  rows: prRows,
+                  hasOverlay: Boolean(overlay),
+                  onRow: (row) => runAction({ name: "intent", params: { id: "pr-details", prompt: "Show this pull request's details" } }, row),
+                  onRelease: () => runAction({ name: "intent", params: { id: "release-brief", prompt: "Summarize release readiness for open pull requests" } }, {}),
+                  onToggleDiff: toggleDiff,
+                  onClose: () => runAction({ name: "close" })
+                }}
+              ></div>
               {#if activeDocId === "prs"}
                 <div class="term-keys">
+                  <span class="term-tip">Type in terminal or click:</span>
                   {#each prRows as row, i}
                     <button onclick={() => runAction({ name: "intent", params: { id: "pr-details", prompt: "Show this pull request's details" } }, row)}>[{i + 1}] PR #{row.number}</button>
                   {/each}
@@ -607,6 +686,7 @@
       (<a href="https://intent-ui.com/rfc" target="_blank" rel="noopener">RFC 0003: Intents and Persistence</a>)
       without reading its reference code.
       <a href="https://github.com/acoyfellow/trees/blob/master/HOST_REPORT.md" target="_blank" rel="noopener">Read the 15 spec friction notes</a> ·
+      <a href="https://github.com/acoyfellow/cloudterm" target="_blank" rel="noopener">cloudterm</a> ·
       <a href="https://github.com/acoyfellow/trees" target="_blank" rel="noopener">Source on GitHub</a> ·
       <a href="https://customer0.dev" target="_blank" rel="noopener">customer0.dev</a>
     </p>
